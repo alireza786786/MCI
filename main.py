@@ -4,11 +4,16 @@ import base64
 import time
 import urllib.parse
 import requests
-from datetime import datetime
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-CHANNEL_TAG = os.getenv("CHANNEL_TAG", "👉🆔@@Goodbaye_filtering📡⚡️")
+
+# نام کانال شما به صورت مستقیم (حتی اگر سکرت گیت‌هاب خالی یا none باشد)
+env_tag = os.getenv("CHANNEL_TAG")
+if not env_tag or env_tag.strip().lower() in ["none", "null", ""]:
+    CHANNEL_TAG = "👉🆔@@Goodbaye_filtering📡"
+else:
+    CHANNEL_TAG = env_tag.strip()
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -62,13 +67,24 @@ def filter_and_deduplicate(raw_configs: list) -> list:
 
     for cfg in raw_configs:
         try:
-            clean_url = cfg.split("#")[0].strip()
+            # جداسازی لینک اصلی از تگ هش انتهای آن
+            parts = cfg.split("#", 1)
+            clean_url = parts[0].strip()
+
+            # بررسی تگ قبلی کانفیگ (اگر نام کشور یا پرچمی داشت نگه داشته شود)
+            old_tag = ""
+            if len(parts) > 1:
+                decoded_old = urllib.parse.unquote(parts[1]).strip()
+                if decoded_old.lower() not in ["none", "null", ""]:
+                    old_tag = decoded_old
+
             parsed = urllib.parse.urlparse(clean_url)
             queries = urllib.parse.parse_qs(parsed.query)
 
             security = queries.get("security", [""])[0].lower()
             transport_type = queries.get("type", [""])[0].lower()
 
+            # فیلتر اختصاصی Reality + gRPC
             if security == "reality" and transport_type == "grpc":
                 server_host = parsed.hostname or ""
                 server_port = parsed.port or ""
@@ -80,7 +96,14 @@ def filter_and_deduplicate(raw_configs: list) -> list:
 
                 if unique_key not in unique_fingerprints:
                     unique_fingerprints.add(unique_key)
-                    encoded_tag = urllib.parse.quote(CHANNEL_TAG)
+                    
+                    # چسباندن تگ کانال شما (در صورت وجود کشور در ادامه آن قرار می‌گیرد)
+                    if old_tag:
+                        final_tag_text = f"{CHANNEL_TAG} {old_tag}"
+                    else:
+                        final_tag_text = f"{CHANNEL_TAG}⚡️"
+
+                    encoded_tag = urllib.parse.quote(final_tag_text)
                     final_config = f"{clean_url}#{encoded_tag}"
                     filtered_list.append(final_config)
         except Exception:
@@ -88,32 +111,8 @@ def filter_and_deduplicate(raw_configs: list) -> list:
 
     return filtered_list
 
-def send_file_to_telegram(configs: list):
-    """ذخیره کانفیگ‌ها در یک فایل و ارسال فایل با کپشن جذاب به تلگرام"""
-    file_name = "Reality_VIP_Configs.txt"
-    with open(file_name, "w", encoding="utf-8") as f:
-        f.write("\n".join(configs))
-
-    caption = (
-        f"📁 <b>فایل اختصاصی تمام کانفیگ‌های Reality + gRPC</b>\n\n"
-        f"⚡️ <b>تعداد کل کانفیگ‌ها:</b> {len(configs)} عدد\n"
-        f"🛡 <b>پروتکل:</b> VLESS Reality gRPC (ضد فیلتر)\n"
-        f"🕒 <b>زمان بروزرسانی:</b> خودکار هر ۴ ساعت\n\n"
-        f"📥 <i>این فایل را در برنامه‌های V2rayNG یا NekoBox ایمپورت کنید.</i>\n\n"
-        f"📢 {CHANNEL_TAG}\n"
-        f"➖➖➖➖➖➖➖➖➖➖"
-    )
-
-    doc_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-    with open(file_name, "rb") as doc:
-        requests.post(
-            doc_url,
-            data={"chat_id": CHAT_ID, "caption": caption, "parse_mode": "HTML"},
-            files={"document": (file_name, doc, "text/plain")},
-            timeout=20
-        )
-
-def send_configs_to_telegram(configs: list):
+def send_file_only_to_telegram(configs: list):
+    """ذخیره در فایل متنی و ارسال فقط به صورت فایل به کانال"""
     if not BOT_TOKEN or not CHAT_ID:
         print("[WARN] Telegram BOT_TOKEN or CHAT_ID is missing.")
         return
@@ -122,32 +121,32 @@ def send_configs_to_telegram(configs: list):
         print("[INFO] No Reality+gRPC configs found.")
         return
 
-    # ۱. اول فایل کامل کانفیگ‌ها ارسال می‌شود
+    file_name = "Reality_VIP_Configs.txt"
+    with open(file_name, "w", encoding="utf-8") as f:
+        f.write("\n".join(configs))
+
+    caption = (
+        f"📁 <b>فایل جامع کانفیگ‌های اختصاصی Reality + gRPC</b>\n\n"
+        f"⚡️ <b>تعداد کانفیگ‌ها:</b> {len(configs)} عدد فعال\n"
+        f"🛡 <b>پروتکل:</b> VLESS Reality gRPC (پرسرعت و ضد فیلتر)\n"
+        f"🔄 <b>بروزرسانی:</b> خودکار هر ۴ ساعت یکبار\n\n"
+        f"📥 <i>این فایل را در نرم‌افزارهای V2rayNG یا NekoBox ایمپورت کنید.</i>\n\n"
+        f"📢 {CHANNEL_TAG}\n"
+        f"➖➖➖➖➖➖➖➖➖➖"
+    )
+
+    doc_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
     try:
-        send_file_to_telegram(configs)
-        print("[OK] Configs file sent successfully.")
+        with open(file_name, "rb") as doc:
+            requests.post(
+                doc_url,
+                data={"chat_id": CHAT_ID, "caption": caption, "parse_mode": "HTML"},
+                files={"document": (file_name, doc, "text/plain")},
+                timeout=30
+            )
+        print("[OK] Only file was sent successfully to the channel.")
     except Exception as e:
         print(f"[FAIL] Sending document failed: {e}")
-
-    # ۲. ارسال چند کانفیگ به صورت مستقیم در کانال برای کپی سریع
-    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    top_samples = configs[:6]  # ارسال ۶ تای اول در متن
-    chunk_size = 2
-
-    for i in range(0, len(top_samples), chunk_size):
-        chunk = top_samples[i:i + chunk_size]
-        message_body = "\n\n".join([f"<code>{c}</code>" for c in chunk])
-        payload = {
-            "chat_id": CHAT_ID,
-            "text": message_body,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True
-        }
-        try:
-            requests.post(api_url, json=payload, timeout=10)
-            time.sleep(2)
-        except Exception as e:
-            print(f"[TELEGRAM FAIL] {e}")
 
 def main():
     if not os.path.exists("sources.txt"):
@@ -165,7 +164,9 @@ def main():
 
     final_configs = filter_and_deduplicate(all_raw_configs)
     print(f"Total Unique VLESS Reality gRPC configs: {len(final_configs)}")
-    send_configs_to_telegram(final_configs)
+
+    # ارسال فقط فایل متنی به تلگرام
+    send_file_only_to_telegram(final_configs)
 
 if __name__ == "__main__":
     main()
