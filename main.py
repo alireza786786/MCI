@@ -8,11 +8,15 @@ import requests
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+# اصلاح شد: فقط یک عدد @ قرار گرفت
 env_tag = os.getenv("CHANNEL_TAG")
 if not env_tag or env_tag.strip().lower() in ["none", "null", ""]:
-    CHANNEL_TAG = "👉🆔@@Goodbaye_filtering📡"
+    CHANNEL_TAG = "👉🆔@Goodbaye_filtering📡"
 else:
     CHANNEL_TAG = env_tag.strip()
+
+# فیلتر خودکار جهت جلوگیری از ایجاد دو @ در هر شرایطی
+CHANNEL_TAG = re.sub(r'@+', '@', CHANNEL_TAG)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -30,18 +34,30 @@ def decode_base64_safely(data: str) -> str:
         return ""
 
 def clean_old_remark(old_tag: str) -> str:
-    """حذف آیدی و تبلیغ کانال‌های قبلی و نگه‌داشتن پرچم، نام کشور و پینگ"""
+    """حذف آیدی‌ها، نام سایت‌ها و تبلیغات متفرقه و حفظ پرچم و نام کشور"""
     if not old_tag or old_tag.lower() in ["none", "null", ""]:
         return ""
     
-    # ۱. حذف الگوهایی شبیه 👉🆔@channel📡
-    t = re.sub(r'👉\s*🆔\s*@+[\w\d_\.-]+\s*📡?', '', old_tag)
-    # ۲. حذف تمامی آیدی‌های تلگرامی (@channel)
-    t = re.sub(r'@+[\w\d_\.-]+', '', t)
-    # ۳. حذف لینک‌های تلگرام مثل t.me/channel
+    t = old_tag
+
+    # ۱. حذف آدرس وب‌سایت‌ها و دامنه‌ها (مثل [openproxylist.com] یا سایت‌های دیگر)
+    t = re.sub(r'https?://\S+', '', t)
     t = re.sub(r'(?:https?:\/\/)?t\.me\/[\w\d_\.-]+', '', t, flags=re.IGNORECASE)
-    # ۴. پاک کردن کاراکترهای جداکننده اضافی از ابتدای متن
-    t = re.sub(r'^[|\-—\s:]+', '', t).strip()
+    t = re.sub(r'\[?[\w\d_\.-]+\.(?:com|net|org|ir|io|me|info|site|xyz|life|app|ru|co|top)\]?', '', t, flags=re.IGNORECASE)
+
+    # ۲. حذف الگوهای آیدی تلگرام مثل 👉🆔@channel📡 یا @channel
+    t = re.sub(r'👉\s*🆔\s*@+[\w\d_\.-]+\s*📡?', '', t)
+    t = re.sub(r'@+[\w\d_\.-]+', '', t)
+
+    # ۳. حذف نوشته‌های اضافی پروتکل مثل vless-US یا vmess-DE
+    t = re.sub(r'\b(?:vless|vmess|trojan|ss|ssr|hysteria\d?)[-_ ]*[a-zA-Z0-9]*\b', '', t, flags=re.IGNORECASE)
+
+    # ۴. پاک‌سازی براکت‌های خالی
+    t = re.sub(r'[\[\]\(\)\{\}]', ' ', t)
+
+    # ۵. پاک‌سازی کاراکترهای اضافه از ابتدا و انتهای متن
+    t = re.sub(r'^[|\-—_:,\s]+', '', t).strip()
+    t = re.sub(r'[|\-—_:,\s]+$', '', t).strip()
     return t
 
 def fetch_source_configs(url: str) -> list:
@@ -84,7 +100,6 @@ def filter_and_deduplicate(raw_configs: list) -> list:
             parts = cfg.split("#", 1)
             clean_url = parts[0].strip()
 
-            # استخراج و تمیز کردن اطلاعات کشور و پینگ از تگ قبلی
             old_tag = ""
             if len(parts) > 1:
                 decoded_old = urllib.parse.unquote(parts[1]).strip()
@@ -95,20 +110,23 @@ def filter_and_deduplicate(raw_configs: list) -> list:
 
             security = queries.get("security", [""])[0].lower()
             transport_type = queries.get("type", [""])[0].lower()
+            flow = queries.get("flow", [""])[0].lower()
 
-            if security == "reality" and transport_type == "grpc":
+            # پشتیبانی از هر دو نوع Reality (gRPC و TCP-Vision)
+            is_grpc = (transport_type == "grpc")
+            is_vision = ("xtls-rprx-vision" in flow)
+
+            if security == "reality" and (is_grpc or is_vision):
                 server_host = parsed.hostname or ""
                 server_port = parsed.port or ""
                 sni = queries.get("sni", [""])[0].lower()
                 pbk = queries.get("pbk", [""])[0]
-                service_name = queries.get("serviceName", [""])[0]
 
-                unique_key = f"{server_host}:{server_port}-{sni}-{pbk}-{service_name}"
+                unique_key = f"{server_host}:{server_port}-{sni}-{pbk}-{transport_type}-{flow}"
 
                 if unique_key not in unique_fingerprints:
                     unique_fingerprints.add(unique_key)
                     
-                    # چسباندن نام کانال شما به جای کانال قبلی همراه با اطلاعات کشور
                     if old_tag:
                         final_tag_text = f"{CHANNEL_TAG}{old_tag}"
                     else:
@@ -128,7 +146,7 @@ def send_file_only_to_telegram(configs: list):
         return
 
     if not configs:
-        print("[INFO] No Reality+gRPC configs found.")
+        print("[INFO] No matching Reality configs found.")
         return
 
     file_name = "Reality_VIP_Configs.txt"
@@ -136,11 +154,11 @@ def send_file_only_to_telegram(configs: list):
         f.write("\n".join(configs))
 
     caption = (
-        f"📁 <b>فایل جامع کانفیگ‌های اختصاصی Reality + gRPC</b>\n\n"
-        f"⚡️ <b>تعداد کانفیگ‌ها:</b> {len(configs)} عدد فعال\n"
-        f"🛡 <b>پروتکل:</b> VLESS Reality gRPC (ضد فیلتر)\n"
-        f"🔄 <b>بروزرسانی:</b> خودکار هر ۴ ساعت\n\n"
-        f"📥 <i>جهت اتصال، این فایل را در V2rayNG یا NekoBox ایمپورت نمایید.</i>\n\n"
+        f"📁 <b>فایل اختصاصی کانفیگ‌های Reality (gRPC & Vision)</b>\n\n"
+        f"⚡️ <b>تعداد کل کانفیگ‌ها:</b> {len(configs)} عدد فعال\n"
+        f"🛡 <b>پروتکل‌ها:</b> Reality gRPC و Reality TCP-Vision\n"
+        f"🔄 <b>بروزرسانی خودکار:</b> هر ۴ ساعت یکبار\n\n"
+        f"📥 <i>این فایل را در نرم‌افزارهای V2rayNG یا NekoBox ایمپورت کنید.</i>\n\n"
         f"📢 {CHANNEL_TAG}\n"
         f"➖➖➖➖➖➖➖➖➖➖"
     )
@@ -154,7 +172,7 @@ def send_file_only_to_telegram(configs: list):
                 files={"document": (file_name, doc, "text/plain")},
                 timeout=30
             )
-        print("[OK] Cleaned file sent successfully.")
+        print("[OK] Cleaned VIP file sent successfully to Telegram.")
     except Exception as e:
         print(f"[FAIL] Sending document failed: {e}")
 
@@ -173,7 +191,7 @@ def main():
         all_raw_configs.extend(configs)
 
     final_configs = filter_and_deduplicate(all_raw_configs)
-    print(f"Total Unique Cleaned Reality gRPC configs: {len(final_configs)}")
+    print(f"Total Unique Cleaned Reality configs: {len(final_configs)}")
 
     send_file_only_to_telegram(final_configs)
 
