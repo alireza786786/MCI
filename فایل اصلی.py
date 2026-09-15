@@ -4,6 +4,7 @@ import base64
 import time
 import urllib.parse
 import requests
+from datetime import datetime
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -87,6 +88,31 @@ def filter_and_deduplicate(raw_configs: list) -> list:
 
     return filtered_list
 
+def send_file_to_telegram(configs: list):
+    """ذخیره کانفیگ‌ها در یک فایل و ارسال فایل با کپشن جذاب به تلگرام"""
+    file_name = "Reality_VIP_Configs.txt"
+    with open(file_name, "w", encoding="utf-8") as f:
+        f.write("\n".join(configs))
+
+    caption = (
+        f"📁 <b>فایل اختصاصی تمام کانفیگ‌های Reality + gRPC</b>\n\n"
+        f"⚡️ <b>تعداد کل کانفیگ‌ها:</b> {len(configs)} عدد\n"
+        f"🛡 <b>پروتکل:</b> VLESS Reality gRPC (ضد فیلتر)\n"
+        f"🕒 <b>زمان بروزرسانی:</b> خودکار هر ۴ ساعت\n\n"
+        f"📥 <i>این فایل را در برنامه‌های V2rayNG یا NekoBox ایمپورت کنید.</i>\n\n"
+        f"📢 {CHANNEL_TAG}\n"
+        f"➖➖➖➖➖➖➖➖➖➖"
+    )
+
+    doc_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    with open(file_name, "rb") as doc:
+        requests.post(
+            doc_url,
+            data={"chat_id": CHAT_ID, "caption": caption, "parse_mode": "HTML"},
+            files={"document": (file_name, doc, "text/plain")},
+            timeout=20
+        )
+
 def send_configs_to_telegram(configs: list):
     if not BOT_TOKEN or not CHAT_ID:
         print("[WARN] Telegram BOT_TOKEN or CHAT_ID is missing.")
@@ -96,23 +122,20 @@ def send_configs_to_telegram(configs: list):
         print("[INFO] No Reality+gRPC configs found.")
         return
 
-    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
-    header = (
-        f"⚡️ <b>کانفیگ‌های اختصاصی VLESS Reality gRPC</b>\n"
-        f"🔄 بروزرسانی خودکار هر ۴ ساعت\n"
-        f"📌 تعداد کانفیگ‌ها: {len(configs)}\n"
-        f"📢 کانال: {CHANNEL_TAG}\n"
-        f"➖➖➖➖➖➖➖➖➖➖"
-    )
+    # ۱. اول فایل کامل کانفیگ‌ها ارسال می‌شود
     try:
-        requests.post(api_url, json={"chat_id": CHAT_ID, "text": header, "parse_mode": "HTML"}, timeout=10)
+        send_file_to_telegram(configs)
+        print("[OK] Configs file sent successfully.")
     except Exception as e:
-        print(f"[TELEGRAM FAIL] {e}")
+        print(f"[FAIL] Sending document failed: {e}")
 
-    chunk_size = 3
-    for i in range(0, len(configs), chunk_size):
-        chunk = configs[i:i + chunk_size]
+    # ۲. ارسال چند کانفیگ به صورت مستقیم در کانال برای کپی سریع
+    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    top_samples = configs[:6]  # ارسال ۶ تای اول در متن
+    chunk_size = 2
+
+    for i in range(0, len(top_samples), chunk_size):
+        chunk = top_samples[i:i + chunk_size]
         message_body = "\n\n".join([f"<code>{c}</code>" for c in chunk])
         payload = {
             "chat_id": CHAT_ID,
@@ -122,7 +145,7 @@ def send_configs_to_telegram(configs: list):
         }
         try:
             requests.post(api_url, json=payload, timeout=10)
-            time.sleep(2.5)
+            time.sleep(2)
         except Exception as e:
             print(f"[TELEGRAM FAIL] {e}")
 
