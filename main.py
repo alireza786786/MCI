@@ -8,7 +8,6 @@ import requests
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# نام کانال شما به صورت مستقیم (حتی اگر سکرت گیت‌هاب خالی یا none باشد)
 env_tag = os.getenv("CHANNEL_TAG")
 if not env_tag or env_tag.strip().lower() in ["none", "null", ""]:
     CHANNEL_TAG = "👉🆔@@Goodbaye_filtering📡"
@@ -29,6 +28,21 @@ def decode_base64_safely(data: str) -> str:
         return decoded_bytes.decode("utf-8", errors="ignore")
     except Exception:
         return ""
+
+def clean_old_remark(old_tag: str) -> str:
+    """حذف آیدی و تبلیغ کانال‌های قبلی و نگه‌داشتن پرچم، نام کشور و پینگ"""
+    if not old_tag or old_tag.lower() in ["none", "null", ""]:
+        return ""
+    
+    # ۱. حذف الگوهایی شبیه 👉🆔@channel📡
+    t = re.sub(r'👉\s*🆔\s*@+[\w\d_\.-]+\s*📡?', '', old_tag)
+    # ۲. حذف تمامی آیدی‌های تلگرامی (@channel)
+    t = re.sub(r'@+[\w\d_\.-]+', '', t)
+    # ۳. حذف لینک‌های تلگرام مثل t.me/channel
+    t = re.sub(r'(?:https?:\/\/)?t\.me\/[\w\d_\.-]+', '', t, flags=re.IGNORECASE)
+    # ۴. پاک کردن کاراکترهای جداکننده اضافی از ابتدای متن
+    t = re.sub(r'^[|\-—\s:]+', '', t).strip()
+    return t
 
 def fetch_source_configs(url: str) -> list:
     configs = []
@@ -67,16 +81,14 @@ def filter_and_deduplicate(raw_configs: list) -> list:
 
     for cfg in raw_configs:
         try:
-            # جداسازی لینک اصلی از تگ هش انتهای آن
             parts = cfg.split("#", 1)
             clean_url = parts[0].strip()
 
-            # بررسی تگ قبلی کانفیگ (اگر نام کشور یا پرچمی داشت نگه داشته شود)
+            # استخراج و تمیز کردن اطلاعات کشور و پینگ از تگ قبلی
             old_tag = ""
             if len(parts) > 1:
                 decoded_old = urllib.parse.unquote(parts[1]).strip()
-                if decoded_old.lower() not in ["none", "null", ""]:
-                    old_tag = decoded_old
+                old_tag = clean_old_remark(decoded_old)
 
             parsed = urllib.parse.urlparse(clean_url)
             queries = urllib.parse.parse_qs(parsed.query)
@@ -84,7 +96,6 @@ def filter_and_deduplicate(raw_configs: list) -> list:
             security = queries.get("security", [""])[0].lower()
             transport_type = queries.get("type", [""])[0].lower()
 
-            # فیلتر اختصاصی Reality + gRPC
             if security == "reality" and transport_type == "grpc":
                 server_host = parsed.hostname or ""
                 server_port = parsed.port or ""
@@ -97,9 +108,9 @@ def filter_and_deduplicate(raw_configs: list) -> list:
                 if unique_key not in unique_fingerprints:
                     unique_fingerprints.add(unique_key)
                     
-                    # چسباندن تگ کانال شما (در صورت وجود کشور در ادامه آن قرار می‌گیرد)
+                    # چسباندن نام کانال شما به جای کانال قبلی همراه با اطلاعات کشور
                     if old_tag:
-                        final_tag_text = f"{CHANNEL_TAG} {old_tag}"
+                        final_tag_text = f"{CHANNEL_TAG}{old_tag}"
                     else:
                         final_tag_text = f"{CHANNEL_TAG}⚡️"
 
@@ -112,7 +123,6 @@ def filter_and_deduplicate(raw_configs: list) -> list:
     return filtered_list
 
 def send_file_only_to_telegram(configs: list):
-    """ذخیره در فایل متنی و ارسال فقط به صورت فایل به کانال"""
     if not BOT_TOKEN or not CHAT_ID:
         print("[WARN] Telegram BOT_TOKEN or CHAT_ID is missing.")
         return
@@ -128,9 +138,9 @@ def send_file_only_to_telegram(configs: list):
     caption = (
         f"📁 <b>فایل جامع کانفیگ‌های اختصاصی Reality + gRPC</b>\n\n"
         f"⚡️ <b>تعداد کانفیگ‌ها:</b> {len(configs)} عدد فعال\n"
-        f"🛡 <b>پروتکل:</b> VLESS Reality gRPC (پرسرعت و ضد فیلتر)\n"
-        f"🔄 <b>بروزرسانی:</b> خودکار هر ۴ ساعت یکبار\n\n"
-        f"📥 <i>این فایل را در نرم‌افزارهای V2rayNG یا NekoBox ایمپورت کنید.</i>\n\n"
+        f"🛡 <b>پروتکل:</b> VLESS Reality gRPC (ضد فیلتر)\n"
+        f"🔄 <b>بروزرسانی:</b> خودکار هر ۴ ساعت\n\n"
+        f"📥 <i>جهت اتصال، این فایل را در V2rayNG یا NekoBox ایمپورت نمایید.</i>\n\n"
         f"📢 {CHANNEL_TAG}\n"
         f"➖➖➖➖➖➖➖➖➖➖"
     )
@@ -144,7 +154,7 @@ def send_file_only_to_telegram(configs: list):
                 files={"document": (file_name, doc, "text/plain")},
                 timeout=30
             )
-        print("[OK] Only file was sent successfully to the channel.")
+        print("[OK] Cleaned file sent successfully.")
     except Exception as e:
         print(f"[FAIL] Sending document failed: {e}")
 
@@ -163,9 +173,8 @@ def main():
         all_raw_configs.extend(configs)
 
     final_configs = filter_and_deduplicate(all_raw_configs)
-    print(f"Total Unique VLESS Reality gRPC configs: {len(final_configs)}")
+    print(f"Total Unique Cleaned Reality gRPC configs: {len(final_configs)}")
 
-    # ارسال فقط فایل متنی به تلگرام
     send_file_only_to_telegram(final_configs)
 
 if __name__ == "__main__":
